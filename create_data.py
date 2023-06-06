@@ -21,6 +21,7 @@ from habitat_sim import registry
 from habitat_sim.agent import SceneNodeControl
 
 from habitat_sim.utils.common import d3_40_colors_rgb, quat_from_coeffs
+from generate_prompts import HabitatSceneDataReader
 
 import cv2
 
@@ -39,7 +40,7 @@ class DataRecorder():
             self.scene_name = self.test_scene.split('/')[-3]
         elif self.dataset == 'hm3d':
             self.scene_config = "/home/nico/semesterproject/habitat-sim/data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json"
-            self.test_scene = "/home/nico/semesterproject/habitat-sim/data/scene_datasets/hm3d/val/00808-y9hTuugGdiq/y9hTuugGdiq.basis.glb"
+            self.test_scene = "/home/nico/semesterproject/habitat-sim/data/scene_datasets/hm3d/val/00813-svBbv1Pavdk/svBbv1Pavdk.basis.glb"
             self.scene_name = self.test_scene.split('/')[-1].split('.')[0]
         elif self.dataset == 'Replica_CAD':
             self.scene_config = "/home/nico/semesterproject/habitat-sim/data/replica_cad/replicaCAD.scene_dataset_config.json"
@@ -49,29 +50,25 @@ class DataRecorder():
             print("dataset not supported")
             exit()
         
-        self.out_dir = '/home/nico/semesterproject/data/re-id_benchmark'
+        self.out_dir = '/home/nico/semesterproject/data/re-id_benchmark_ycb'
         self.initial_state_dict_path = 'data/init_state_dict.pkl'
         self.object_config_dir = "data/replica_cad/configs/objects"
 
         self.save = False
         self.rec_type = rec_type
 
-        os.makedirs(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "color/"), exist_ok=True)
-        os.makedirs(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "depth/"), exist_ok=True)
-        os.makedirs(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "semantic/"), exist_ok=True)
-        os.makedirs(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "semantic_raw/"), exist_ok=True)
+        self.datadir = os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type)
+        os.makedirs(os.path.join(self.datadir, "color/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "depth/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "semantic/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "semantic_raw/"), exist_ok=True)
 
         #create file if not exist:
-        if not os.path.exists(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json")):
-            with open(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json"),'a+') as f:
+        if not os.path.exists(os.path.join(self.datadir, "camera_poses.json")):
+            with open(os.path.join(self.datadir, "camera_poses.json"),'a+') as f:
                 json.dump({}, f)
-        
-        if os.path.exists(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json")):
-            with open(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json"),'r') as f:
-                self.camera_poses = json.load(f)
-        else:
-            Path(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json")).touch(exist_ok=True)
-            self.camera_poses = {}
+        with open(os.path.join(self.datadir, "camera_poses.json"),'r') as f:
+            self.camera_poses = json.load(f)
 
         self.agent_poses = []
         self.object_list = []
@@ -142,8 +139,13 @@ class DataRecorder():
             115:"move_backward"}
         self.list_of_actions = []
 
-        # get palette to visualize semantics in pastel colors
         self.semantic_palette = np.array(self.generate_color_palette(256),dtype=np.uint8)
+        if not os.path.exists(os.path.join(self.datadir, "color_map.json")):
+            with open(os.path.join(self.datadir, "color_map.json"),'a+') as f:
+                json.dump({}, f)
+        
+        # with open(os.path.join(self.datadir, "color_map.json"),'r') as f:
+        #     self.color_map = json.load(f)
         self.color_map = {}
 
         # objects:
@@ -246,6 +248,45 @@ class DataRecorder():
             if self.save:
                 self.save_images()
 
+        elif key == 105: # i
+            print("postprocessing previous scene")
+            self.save_camera_poses()
+            self.postprocess_semantic_obs()
+            self.save_color_map()
+
+            pr = input("generate prompts (y/n)?")
+
+            if pr == "y":
+                datareader = HabitatSceneDataReader(self.datadir)
+
+                image_names = [n.split('.')[0] for n in sorted(os.listdir(datareader.rgb_path))][::20]
+
+                for image in image_names:
+                    datareader(image)
+
+                datareader.save_prompts()
+
+                cv2.destroyWindow('color')
+                cv2.destroyWindow('seg')
+
+            print("postprocessing done, initializing new scene")
+            self.save = False
+            self.save_count = 0
+            self.agent_poses = []
+            self.scene_name = input("Enter new scene name: ")
+            self.datadir = os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type)
+            os.makedirs(os.path.join(self.datadir, "color/"), exist_ok=True)
+            os.makedirs(os.path.join(self.datadir, "depth/"), exist_ok=True)
+            os.makedirs(os.path.join(self.datadir, "semantic/"), exist_ok=True)
+            os.makedirs(os.path.join(self.datadir, "semantic_raw/"), exist_ok=True)
+
+            #create file if not exist:
+            if not os.path.exists(os.path.join(self.datadir, "camera_poses.json")):
+                with open(os.path.join(self.datadir, "camera_poses.json"),'a+') as f:
+                    json.dump({}, f)
+            with open(os.path.join(self.datadir, "camera_poses.json"),'r') as f:
+                self.camera_poses = json.load(f)
+            
         elif key == 32: # space
             self.save = True
 
@@ -260,8 +301,8 @@ class DataRecorder():
         
         elif key == 107: # k
             obj = self.object_list[0]
-            obj.velocity_control.linear_velocity = [0.0, 0.0, -0.35]
-            obj.velocity_control.angular_velocity = [0.0, 0.0, 0.0]
+            # obj.velocity_control.linear_velocity = [0.0, 0.0, 0.0]
+            # obj.velocity_control.angular_velocity = [0.0, 0.0, 0.0]
             return
 
         
@@ -291,6 +332,8 @@ class DataRecorder():
                     pass
 
             self.list_of_actions.pop(-1)
+
+        self.sim.step_physics(1.0/60.0)
 
         if self.save:
             self.save_count += 1
@@ -455,15 +498,15 @@ class DataRecorder():
     def save_images(self):
 
         rgb_img     = cv2.cvtColor(np.asarray(Image.fromarray(self.observations["color_sensor"], mode="RGBA")), cv2.COLOR_BGR2RGB)
-        depth_image = (self.observations["depth_sensor"]*20).astype(np.uint16)
+        depth_image = (self.observations["depth_sensor"]/10).astype(np.uint16)
         semantic_obs = self.observations["semantic_sensor"]
-        np.save(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, f"semantic_raw/{str(self.save_count).zfill(7)}.npy"), semantic_obs)
+        np.save(os.path.join(self.datadir, f"semantic_raw/{str(self.save_count).zfill(7)}.npy"), semantic_obs)
 
         sensor_pos, sensor_rot = self.get_camera_pose()
         self.camera_poses[str(self.save_count).zfill(7)] ={"position": sensor_pos.tolist(), "orientation": sensor_rot.tolist()}
 
-        cv2.imwrite(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, f"color/{str(self.save_count).zfill(7)}.jpg"), rgb_img)
-        cv2.imwrite(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, f"depth/{str(self.save_count).zfill(7)}.jpg"), depth_image)
+        cv2.imwrite(os.path.join(self.datadir, f"color/{str(self.save_count).zfill(7)}.jpg"), rgb_img)
+        cv2.imwrite(os.path.join(self.datadir, f"depth/{str(self.save_count).zfill(7)}.png"), depth_image)
 
     def semantic_obs_to_img(self, semantic_obs):
         semantic_img = Image.new("P", (semantic_obs.shape[1], semantic_obs.shape[0]))
@@ -500,6 +543,10 @@ class DataRecorder():
         template_handles = self.obj_templates_mgr.get_template_handles()
         object_template_handle = os.path.join(self.object_config_dir, object_name + ".object_config.json")
 
+        if not Path.exists(Path(object_template_handle)):
+            print("invalid object name")
+            return
+        
         agent_position = self.sim.agents[0].get_state().sensor_states['color_sensor'].position
         agent_rotation = habitat_sim.utils.common.quat_to_magnum(self.sim.agents[0].get_state().sensor_states['color_sensor'].rotation)
         agent_forward = agent_rotation.transform_vector(
@@ -530,17 +577,12 @@ class DataRecorder():
         with open(self.initial_state_dict_path, 'wb') as f:
             pickle.dump(self.agent_initial_state_dict, f)
 
-    def save_camera_poses(self):
-        """
-        Save the camera poses.
-        """
-        with open(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "camera_poses.json"), 'w') as f:
-            json.dump(self.camera_poses, f)
 
     def raw_to_object_seg(self, semantic_obs, semantic_palette, labels):
         semantic_obs = np.where(semantic_obs < 1000, 0, semantic_obs)
             
         for i, value in enumerate(labels):
+            value = int(value)
             if value == 0:
                 self.color_map[value] = (0, 0, 0)
             else:
@@ -552,17 +594,20 @@ class DataRecorder():
         return semantic_img
 
     def postprocess_semantic_obs(self):
-        datadir = os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type, "semantic_raw")
+        datadir = os.path.join(self.datadir, "semantic_raw")
         data_names = sorted(os.listdir(datadir))
-        first_data = np.load(os.path.join(datadir, data_names[0]))
-        first_data = np.where(first_data < 1000, 0, first_data)
-        labels = np.unique(first_data)
-        semantic_palette = self.generate_color_palette(np.unique(first_data).shape[0]-1)
+        labels = []
+        for img_name in data_names:
+            img = np.load(os.path.join(datadir, img_name))
+            img = np.where(img < 1000, 0, img)
+            labels += [i for i in np.unique(img) if i not in labels]
+        labels = np.array(sorted(labels))
+        semantic_palette = self.generate_color_palette(np.unique(labels).shape[0]-1)
 
         for data_name in data_names:
             data_raw = np.load(os.path.join(datadir, data_name))
             semantics = self.raw_to_object_seg(data_raw, semantic_palette, labels)
-            cv2.imwrite(os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type,"semantic", data_name.replace("npy", "jpg")), semantics)
+            cv2.imwrite(os.path.join(self.datadir,"semantic", data_name.replace("npy", "png")), semantics)
     
     def generate_color_palette(self, num_colors):
         random.seed(42) 
@@ -629,7 +674,20 @@ class DataRecorder():
             rgb_img = cv2.cvtColor(np.asarray(Image.fromarray(self.observations["color_sensor"], mode="RGBA")), cv2.COLOR_BGR2RGB)
             cv2.imshow('RGB', rgb_img)
             k = cv2.waitKey(int(1000/60))
-        
+    
+    def save_camera_poses(self):
+        """
+        Save the camera poses.
+        """
+        with open(os.path.join(self.datadir, "camera_poses.json"), 'w') as f:
+            json.dump(self.camera_poses, f)
+    
+    def save_color_map(self):
+        """
+        Save the color map.
+        """
+        with open(os.path.join(self.datadir, "color_map.json"), 'w') as f:
+            json.dump(self.color_map, f)
 
 @registry.register_move_fn(body_action=False)
 class LookDown(SceneNodeControl):
@@ -851,10 +909,27 @@ def main():
         if key == 27:
             break
     
+    print("postprocessing...")
+    cv2.destroyAllWindows()
     rec.save_camera_poses()
     rec.postprocess_semantic_obs()
+    rec.save_color_map()
 
-    cv2.destroyAllWindows()
+    pr = input("generate prompts (y/n)?")
+
+    if pr == "y":
+        datareader = HabitatSceneDataReader(rec.datadir)
+
+        image_names = [n.split('.')[0] for n in sorted(os.listdir(datareader.rgb_path))][::20]
+
+        for image in image_names:
+            datareader(image)
+
+        datareader.save_prompts()
+
+        cv2.destroyWindow('color')
+        # cv2.destroyWindow('seg')
+
 
 if __name__ == "__main__":
     main()
