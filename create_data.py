@@ -6,6 +6,8 @@ import json
 import pickle
 from pathlib import Path
 import colorsys
+import math
+from datetime import datetime
 
 # interpolation:
 from scipy.interpolate import splprep, splev
@@ -39,9 +41,12 @@ class DataRecorder():
             self.test_scene = f"data/Replica-Dataset/dataset/{scene}/habitat/mesh_semantic.ply"
             self.scene_name = self.test_scene.split('/')[-3]
         elif self.dataset == 'hm3d':
-            self.scene_config = "/home/nico/semesterproject/habitat-sim/data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json"
-            self.test_scene = "/home/nico/semesterproject/habitat-sim/data/scene_datasets/hm3d/val/00813-svBbv1Pavdk/svBbv1Pavdk.basis.glb"
+            hm3d_dir = "data/scene_datasets/hm3d/"
+            self.scene_config = os.path.join(hm3d_dir, "hm3d_annotated_basis.scene_dataset_config.json")
+            all_scenes = self.get_all_scenes()
+            self.test_scene = os.path.join(hm3d_dir, sorted([i for i in all_scenes if "val" in i and "mini" not in i])[29])
             self.scene_name = self.test_scene.split('/')[-1].split('.')[0]
+            print("scene: ", self.test_scene)
         elif self.dataset == 'Replica_CAD':
             self.scene_config = "/home/nico/semesterproject/habitat-sim/data/replica_cad/replicaCAD.scene_dataset_config.json"
             self.test_scene = "apt_1"
@@ -50,25 +55,21 @@ class DataRecorder():
             print("dataset not supported")
             exit()
         
+        self.trajectory_folder = "/home/nico/semesterproject/data/re-id_benchmark_ycb/trajectories/"        
         self.out_dir = '/home/nico/semesterproject/data/re-id_benchmark_ycb'
         self.initial_state_dict_path = 'data/init_state_dict.pkl'
-        self.object_config_dir = "data/replica_cad/configs/objects"
+        self.object_config_dir = "data/replica_cad/configs/objects_new_label"
 
         self.save = False
         self.rec_type = rec_type
-
-        self.datadir = os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type)
-        os.makedirs(os.path.join(self.datadir, "color/"), exist_ok=True)
-        os.makedirs(os.path.join(self.datadir, "depth/"), exist_ok=True)
-        os.makedirs(os.path.join(self.datadir, "semantic/"), exist_ok=True)
-        os.makedirs(os.path.join(self.datadir, "semantic_raw/"), exist_ok=True)
-
-        #create file if not exist:
-        if not os.path.exists(os.path.join(self.datadir, "camera_poses.json")):
-            with open(os.path.join(self.datadir, "camera_poses.json"),'a+') as f:
-                json.dump({}, f)
-        with open(os.path.join(self.datadir, "camera_poses.json"),'r') as f:
-            self.camera_poses = json.load(f)
+        
+        width = 1280
+        height = 720
+        fov = math.pi/2
+        self.camera_matrix = np.array(
+            [[width / (2 * math.tan(fov / 2)), 0, width / 2],
+            [0, width / (2 * math.tan(fov / 2)), height / 2],
+            [0, 0, 1]], dtype=np.float32)
 
         self.agent_poses = []
         self.object_list = []
@@ -78,6 +79,14 @@ class DataRecorder():
 
         self.translation_step = 0.1
         self.rotation_step = 4
+
+        self.list_of_actions = []
+
+        self.semantic_palette = np.array(self.generate_color_palette(256),dtype=np.uint8)
+        
+        self.color_map = {}
+
+    def initialize_habitat_sim(self):
 
         self.sim_settings = {
             "scene": self.test_scene,  # Scene path
@@ -137,17 +146,6 @@ class DataRecorder():
             100:"move_right", 110:"move_up",109:"move_down",
             105:"look_down", 107:"look_up", 119:"move_forward", 
             115:"move_backward"}
-        self.list_of_actions = []
-
-        self.semantic_palette = np.array(self.generate_color_palette(256),dtype=np.uint8)
-        if not os.path.exists(os.path.join(self.datadir, "color_map.json")):
-            with open(os.path.join(self.datadir, "color_map.json"),'a+') as f:
-                json.dump({}, f)
-        
-        # with open(os.path.join(self.datadir, "color_map.json"),'r') as f:
-        #     self.color_map = json.load(f)
-        self.color_map = {}
-
         # objects:
         self.obj_templates_mgr = self.sim.get_object_template_manager()
 
@@ -155,6 +153,34 @@ class DataRecorder():
         self.rigid_obj_mgr = self.sim.get_rigid_object_manager()
 
         self.obj_templates_mgr.load_configs(self.object_config_dir)
+
+    def create_folder_structure(self):
+        self.datadir = os.path.join(self.out_dir, self.scene_name + "_" + self.rec_type)
+        os.makedirs(os.path.join(self.datadir, "color/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "depth/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "semantic/"), exist_ok=True)
+        os.makedirs(os.path.join(self.datadir, "semantic_raw/"), exist_ok=True)
+
+        #create file if not exist:
+        if not os.path.exists(os.path.join(self.datadir, "camera_poses.json")):
+            with open(os.path.join(self.datadir, "camera_poses.json"),'a+') as f:
+                json.dump({}, f)
+        with open(os.path.join(self.datadir, "camera_poses.json"),'r') as f:
+            self.camera_poses = json.load(f)
+        
+        if not os.path.exists(os.path.join(self.datadir, "color_map.json")):
+            with open(os.path.join(self.datadir, "color_map.json"),'a+') as f:
+                json.dump({}, f)
+
+    def get_all_scenes(self):
+        with open(self.scene_config, 'r') as f:
+            scene_conf = json.load(f)
+        
+        all_scene_paths_short = scene_conf["stages"]["paths"][".glb"]
+        scene_names = [i.split("-")[-1].split("/")[0] for i in all_scene_paths_short]
+        all_scene_paths_full = [val.replace("*", scene_names[idx]) for idx, val in enumerate(all_scene_paths_short)]
+        return sorted(all_scene_paths_full)
+
 
     def __call__(self, key):
         if key != 8 and key != 27 and key != 111 and key != 32:
@@ -235,6 +261,10 @@ class DataRecorder():
             self.record_pose()
             return
 
+        elif key == 116: # t
+            self.agent_poses.pop(-1)
+            return
+
         elif key == 111: # o
             self.spawn_random_object_infront_of_agent()
             self.sim.step_physics(1.0)
@@ -296,11 +326,29 @@ class DataRecorder():
             return
         
         elif key == 108: # l
-            self.play_trajectory(400)
+            self.save = True
+            n = 400
+            trajectory = self.interpolate_poses(self.agent_poses, n)
+            if trajectory is None:
+                print("faulty agent poses")
+                self.agent_poses = []
+                return
+            self.play_trajectory(trajectory)
+            self.save_trajectory(trajectory)
+            return
+        
+        elif key == 98: # b
+            n = 400
+            trajectory = self.interpolate_poses(self.agent_poses, n)
+            if trajectory is None:
+                print("faulty agent poses")
+                self.agent_poses = []
+                return
+            self.save_trajectory(trajectory)
             return
         
         elif key == 107: # k
-            obj = self.object_list[0]
+            # obj = self.object_list[0]
             # obj.velocity_control.linear_velocity = [0.0, 0.0, 0.0]
             # obj.velocity_control.angular_velocity = [0.0, 0.0, 0.0]
             return
@@ -333,7 +381,7 @@ class DataRecorder():
 
             self.list_of_actions.pop(-1)
 
-        self.sim.step_physics(1.0/60.0)
+        self.sim.step_physics(1.0/30.0)
 
         if self.save:
             self.save_count += 1
@@ -498,9 +546,11 @@ class DataRecorder():
     def save_images(self):
 
         rgb_img     = cv2.cvtColor(np.asarray(Image.fromarray(self.observations["color_sensor"], mode="RGBA")), cv2.COLOR_BGR2RGB)
-        depth_image = (self.observations["depth_sensor"]/10).astype(np.uint16)
+        depth_image = (self.observations["depth_sensor"]*1000).astype(np.uint16)
         semantic_obs = self.observations["semantic_sensor"]
-        np.save(os.path.join(self.datadir, f"semantic_raw/{str(self.save_count).zfill(7)}.npy"), semantic_obs)
+        # np.save(os.path.join(self.datadir, f"semantic_raw/{str(self.save_count).zfill(7)}.npy"), semantic_obs)
+        semantic_obs = semantic_obs.astype(np.uint16)
+        cv2.imwrite(os.path.join(self.datadir, f"semantic_raw/{str(self.save_count).zfill(7)}.png"), semantic_obs)
 
         sensor_pos, sensor_rot = self.get_camera_pose()
         self.camera_poses[str(self.save_count).zfill(7)] ={"position": sensor_pos.tolist(), "orientation": sensor_rot.tolist()}
@@ -566,6 +616,11 @@ class DataRecorder():
         
         self.object_list.append(obj)
 
+    def remove_object(self, id):
+        obj = self.object_list[id]
+        self.rigid_obj_mgr.remove_object_by_handle(obj.handle)
+        self.object_list.pop(id)
+
     def set_agent_state_as_initial_state(self):
         """
         Set the agent's initial state.
@@ -579,7 +634,7 @@ class DataRecorder():
 
 
     def raw_to_object_seg(self, semantic_obs, semantic_palette, labels):
-        semantic_obs = np.where(semantic_obs < 1000, 0, semantic_obs)
+        semantic_obs = np.where(semantic_obs < 1660, 0, semantic_obs)
             
         for i, value in enumerate(labels):
             value = int(value)
@@ -598,23 +653,25 @@ class DataRecorder():
         data_names = sorted(os.listdir(datadir))
         labels = []
         for img_name in data_names:
-            img = np.load(os.path.join(datadir, img_name))
+            img = cv2.imread(os.path.join(datadir, img_name), -1)
             img = np.where(img < 1000, 0, img)
             labels += [i for i in np.unique(img) if i not in labels]
         labels = np.array(sorted(labels))
         semantic_palette = self.generate_color_palette(np.unique(labels).shape[0]-1)
 
         for data_name in data_names:
-            data_raw = np.load(os.path.join(datadir, data_name))
+            data_raw = cv2.imread(os.path.join(datadir, data_name), -1)
             semantics = self.raw_to_object_seg(data_raw, semantic_palette, labels)
             cv2.imwrite(os.path.join(self.datadir,"semantic", data_name.replace("npy", "png")), semantics)
     
     def generate_color_palette(self, num_colors):
-        random.seed(42) 
+        random.seed(42)
         hsv_tuples = [(x / num_colors, 1., 1.) for x in range(num_colors)]
         random.shuffle(hsv_tuples)
+        random.seed(datetime.now().timestamp())
         rgb_tuples = map(lambda x: tuple(int(255 * i) for i in colorsys.hsv_to_rgb(*x)), hsv_tuples)
         bgr_tuples = map(lambda x: (x[2], x[1], x[0]), rgb_tuples)
+        
         return list(bgr_tuples)
     
     def record_pose(self):
@@ -627,14 +684,28 @@ class DataRecorder():
         self.agent_poses.append((position, orientation, camera_position, camera_orientation))
 
     def interpolate_poses(self, agent_poses, n):
-        positions = [pose[0] for pose in agent_poses]
-        quaternions = [pose[1] for pose in agent_poses]
-        camera_positions = [pose[2] for pose in agent_poses]
-        camera_quaternions = [pose[3] for pose in agent_poses]
-
+        positions = []
+        quaternions = []
+        camera_positions = []
+        camera_quaternions = []
+        for pose in agent_poses:
+            if positions and np.all(pose[0] == positions[-1]):
+                continue
+            positions.append(pose[0])
+            quaternions.append(pose[1])
+            camera_positions.append(pose[2])
+            camera_quaternions.append(pose[3])
+        # positions = [pose[0] for pose in agent_poses]
+        # quaternions = [pose[1] for pose in agent_poses]
+        # camera_positions = [pose[2] for pose in agent_poses]
+        # camera_quaternions = [pose[3] for pose in agent_poses]
         positions_array = np.array(positions)
         camera_positions_array = np.array(camera_positions)
-        tck_pos, u_pos = splprep(positions_array.T, s=0)
+        try:
+            tck_pos, u_pos = splprep(positions_array.T, s=0)
+        except Exception as e:
+            print("Trajectory could not be interpolated")
+            return None
         tck_cam, u_cam = splprep(camera_positions_array.T, s=0)
 
         u_pos_new = np.linspace(u_pos.min(), u_pos.max(), n)
@@ -654,26 +725,39 @@ class DataRecorder():
 
         return list(zip(new_positions, new_quaternions, new_camera_positions, new_camera_quaternions))
     
-    def play_trajectory(self, n):
-        self.save = True
-        trajectory = self.interpolate_poses(self.agent_poses, n)
+    def save_trajectory(self, trajectory):
+        trajectory_name = self.test_scene.split("/")[-1].split(".")[0]
+        trajectory_info = {"scene": self.test_scene, "trajectory": []}
+        if os.path.exists(os.path.join(self.trajectory_folder, trajectory_name + ".pickle")):
+            with open(os.path.join(self.trajectory_folder, trajectory_name + ".pickle"), "rb") as f:
+                trajectory_info = pickle.load(f)
+        trajectory_info["trajectory"].append(trajectory)
+
+        with open(os.path.join(self.trajectory_folder, trajectory_name + ".pickle"), "wb") as f:
+            pickle.dump(trajectory_info, f)
+
+        self.agent_poses = []
+        print("trajectory saved.")
+    
+    def play_trajectory(self, trajectory):
         for state in trajectory:
             agent_state = habitat_sim.AgentState()
             agent_state.position = state[0]
             agent_state.rotation = state[1]
-            agent_state.sensor_states['color_sensor'] = habitat_sim.SixDOFPose(state[2], state[3])
-            agent_state.sensor_states['depth_sensor'] = habitat_sim.SixDOFPose(state[2], state[3])
-            agent_state.sensor_states['semantic_sensor'] = habitat_sim.SixDOFPose(state[2], state[3])
+            sensor_rot_modified = state[3] * quaternion.from_rotation_vector(habitat_sim.geo.LEFT * np.pi / 10)
+            agent_state.sensor_states['color_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
+            agent_state.sensor_states['depth_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
+            agent_state.sensor_states['semantic_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
             self.sim.agents[0].set_state(agent_state, infer_sensor_states=False)
-            self.sim.step_physics(1.0/60.0)
+            self.sim.step_physics(1.0/30.0)
             self.observations = self.sim.get_sensor_observations()
 
             if self.save:
                 self.save_images()
                 self.save_count += 1
             rgb_img = cv2.cvtColor(np.asarray(Image.fromarray(self.observations["color_sensor"], mode="RGBA")), cv2.COLOR_BGR2RGB)
-            cv2.imshow('RGB', rgb_img)
-            k = cv2.waitKey(int(1000/60))
+            # cv2.imshow('RGB', rgb_img)
+            # k = cv2.waitKey(1.0)
     
     def save_camera_poses(self):
         """
@@ -687,7 +771,7 @@ class DataRecorder():
         Save the color map.
         """
         with open(os.path.join(self.datadir, "color_map.json"), 'w') as f:
-            json.dump(self.color_map, f)
+            json.dump(self.color_map, f)          
 
 @registry.register_move_fn(body_action=False)
 class LookDown(SceneNodeControl):
@@ -888,6 +972,8 @@ class LoiterLeft(SceneNodeControl):
 def main():
 
     rec = DataRecorder()
+    rec.create_folder_structure()
+    rec.initialize_habitat_sim()
 
     cv2.namedWindow('Semantics' , cv2.WINDOW_AUTOSIZE)
     cv2.namedWindow('RGB', cv2.WINDOW_AUTOSIZE)
@@ -906,7 +992,7 @@ def main():
         cv2.imshow('RGB', rgb_img)
         cv2.imshow('Semantics', semantic_img)
 
-        if key == 27:
+        if key == 27: # ESC
             break
     
     print("postprocessing...")
