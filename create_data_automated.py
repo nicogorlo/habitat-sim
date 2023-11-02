@@ -37,20 +37,21 @@ class AutomatedDataRecorder(DataRecorder):
             hm3d_dir = "data/scene_datasets/hm3d/"
             self.scene_config = os.path.join(hm3d_dir, "hm3d_annotated_basis.scene_dataset_config.json")
             all_scenes = self.get_all_scenes()
-            self.test_scene = os.path.join(hm3d_dir, [i for i in all_scenes if "val" in i][scene_id])
+            self.test_scene = os.path.join(hm3d_dir, [i for i in all_scenes if "train" in i][scene_id])
 
             self.scene_name = self.test_scene.split("/")[-1].split(".")[0]
 
         with open("/home/nico/semesterproject/data/re-id_benchmark_ycb/object_groups.json") as f:
             self.object_groups = json.load(f)
-        self.object_categories = [["cans", "boxes"], ["kitchen_items"], ["toys"], ["tools"], ["fruit"]]
+        self.object_categories = [["kitchen_items"], ["toys"], ["tools"]]
 
-        trajectory_path = f"/home/nico/semesterproject/data/re-id_benchmark_ycb/trajectories/{self.scene_name}.pickle"
+        trajectory_path = f"/home/nico/semesterproject/data/re-id_benchmark_ycb/trajectories/train/{self.scene_name}.pickle"
         self.trajectory_dict = self.load_trajectory_dict(trajectory_path)
         self.trajectory_list = self.trajectory_dict["trajectory"]
     
         self.selected_coordinates = (0,0)
 
+        self.dynamic_scene = True
         self.selected = False
         
     def create_data_auto(self):
@@ -59,10 +60,11 @@ class AutomatedDataRecorder(DataRecorder):
         random.shuffle(self.object_categories, random.random)
         print(self.object_categories)
         for idx, trajectory in enumerate(self.trajectory_list):
+            if idx <= 1: continue
             self.create_folder_structure(idx)
             self.initialize_habitat_sim()
             self.spawn_objects_along_trajectory(trajectory, traj_id=idx)
-            self.sim.step_physics(5.0)
+            self.sim.step_physics(1.0/60.0)
             self.play_trajectory(trajectory)
             self.remove_all_objects()
             self.save_count = 0
@@ -89,9 +91,18 @@ class AutomatedDataRecorder(DataRecorder):
     def spawn_objects_along_trajectory(self, trajectory, traj_id):
 
         all_objects = []
-        for category in self.object_categories[traj_id]:
-            all_objects += self.object_groups[category]
-        
+        for category in self.object_categories:
+            all_objects += [self.object_groups[category[0]][random.randint(0, len(self.object_groups[category[0]])-1)]]
+
+        for i in range(10):
+            random_category = self.object_categories[random.randint(0, len(self.object_categories)-1)][0]
+            random_object = random.randint(0, len(self.object_groups[random_category])-1)
+            object_add = self.object_groups[random_category][random_object]
+            if object_add not in all_objects:
+                all_objects += [object_add]
+            
+            all_objects = list(np.unique(all_objects))
+
         for idx, obj in enumerate(all_objects):
             state = trajectory[20*idx]
             agent_state = habitat_sim.AgentState()
@@ -190,7 +201,7 @@ class AutomatedDataRecorder(DataRecorder):
             datareader.save_prompts()
 
 def main():
-    scene_id = 29
+    scene_id = 10
     rec = AutomatedDataRecorder(scene_id)
     rec.create_data_auto()
 

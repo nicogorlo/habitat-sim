@@ -19,7 +19,7 @@ class AttributeEvaluator:
             "FST": 0,
         }
 
-        self.datadir = "/home/nico/semesterproject/data/re-id_benchmark_ycb"
+        self.datadir = "/home/nico/semesterproject/data/re_id_benchmark_ycb"
 
         self.setting = "multi_object"
 
@@ -27,7 +27,7 @@ class AttributeEvaluator:
 
     def load_attributes(self):
         dir = os.path.join(self.datadir, self.setting)
-        for task in sorted(os.listdir(dir)):
+        for task in sorted([i for i in os.listdir(dir) if os.path.isdir(os.path.join(dir, i))]):
             for train_test in ["train", "test"]:
                 for sequence in sorted(os.listdir(os.path.join(dir, task, train_test))):
                     self.scene_counter += 1
@@ -36,11 +36,13 @@ class AttributeEvaluator:
                     for attribute in scene_attributes:
                         self.attribute_counter[attribute] += scene_attributes[attribute]
                     
-
+        print(self.scene_counter)
 
     def visualize_attributes(self):
-        plt.bar(range(len(self.attribute_counter)+1),[self.scene_counter] + list(self.attribute_counter.values()), align='center')
-        plt.xticks(range(len(self.attribute_counter)+1),["N_Scenes"] + list(self.attribute_counter.keys()))
+        font = {'fontname': "Times New Roman", "fontsize": 14}
+        plt.rc('ytick', labelsize=14)
+        plt.bar(range(len(self.attribute_counter)),list(self.attribute_counter.values()), align='center')
+        plt.xticks(range(len(self.attribute_counter)),list(self.attribute_counter.keys()), **font)
         plt.show()
 
 

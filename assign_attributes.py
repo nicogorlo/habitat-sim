@@ -12,8 +12,8 @@ class AttributeWriter():
     def __init__(self):
 
         self.clutter_threshold = 6
-        self.small_object_threshold = 0.02
-        self.small_object_in_individual_frame_threshold = 0.01
+        self.small_object_threshold = 0.005
+        self.small_object_in_individual_frame_threshold = 0.001
         self.total_spatial_distance_threshold = 20
         self.total_rotation_distance_threshold = 8
         self.linear_velocity_threshold = 1.5
@@ -40,12 +40,14 @@ class AttributeWriter():
             "FST": "Camera is moving fast"
         }
 
-        self.datadir = "/home/nico/semesterproject/data/re-id_benchmark_ycb"
+        self.datadir = "/home/nico/semesterproject/data/re_id_benchmark_ycb"
+
+        cv2.namedWindow("img")
 
     def __call__(self):
-        for setting in sorted(os.listdir(self.datadir)):
+        for setting in ["multi_object"]:#, "single_object"]:
             print("Setting: {}".format(setting))
-            for task in sorted(os.listdir(os.path.join(self.datadir, setting))):
+            for task in [i for i in sorted(os.listdir(os.path.join(self.datadir, setting)))]:
                 print("Task: {}".format(task))
                 for train_test in ["train", "test"]:
                     for sequence in sorted(os.listdir(os.path.join(self.datadir, setting, task, train_test))):
@@ -53,7 +55,7 @@ class AttributeWriter():
                         # success = False
                         success = True
                         while not success:
-                            img_dir = os.path.join(self.datadir, setting, task, train_test, sequence, "color")
+                            img_dir = os.path.join(seq_dir, "color")
                             for img_name in sorted(os.listdir(img_dir)):
                                 img = cv2.imread(os.path.join(img_dir, img_name))
                                 cv2.imshow("img", img)
@@ -69,9 +71,11 @@ class AttributeWriter():
                                 continue
 
                         cv2.destroyAllWindows()
+
+                        print(f"sequence: {sequence}")
                         
-                        if os.path.exists(os.path.join(self.datadir, setting, task, train_test, sequence, "attributes.json")):
-                            scene_attributes = json.load(open(os.path.join(self.datadir, setting, task, train_test, sequence, "attributes.json")))
+                        if os.path.exists(os.path.join(seq_dir, "attributes.json")):
+                            scene_attributes = json.load(open(os.path.join(seq_dir, "attributes.json")))
                         else:
                             scene_attributes = self.default_attributes
                             for attribute in self.manual_attributes:
@@ -82,7 +86,7 @@ class AttributeWriter():
                         scene_attributes["SML"], scene_attributes["SMF"] = self.evaluate_small_objects(seq_dir)
                         
 
-                        with open(os.path.join(self.datadir, setting, task, train_test, sequence, "attributes.json"), "w") as f:
+                        with open(os.path.join(seq_dir, "attributes.json"), "w") as f:
                             json.dump(scene_attributes, f, indent=4)
 
     def evaluate_fast(self, seq_dir):
@@ -168,7 +172,10 @@ class AttributeWriter():
         for id in tracked_semantic_ids:
             areas[id] = []
         for img_name in sorted(os.listdir(os.path.join(seq_dir, "semantic_raw"))):
-            sem = np.load(os.path.join(seq_dir, "semantic_raw", img_name))
+            if img_name.endswith(".npy"):
+                sem = np.load(os.path.join(seq_dir, "semantic_raw", img_name))
+            elif img_name.endswith(".png"):
+                sem = cv2.imread(os.path.join(seq_dir, "semantic_raw", img_name), -1)
             for id in tracked_semantic_ids:
                 bbox = self.get_bbox_from_mask(sem == id)
                 if bbox is None:

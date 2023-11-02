@@ -44,7 +44,7 @@ class DataRecorder():
             hm3d_dir = "data/scene_datasets/hm3d/"
             self.scene_config = os.path.join(hm3d_dir, "hm3d_annotated_basis.scene_dataset_config.json")
             all_scenes = self.get_all_scenes()
-            self.test_scene = os.path.join(hm3d_dir, sorted([i for i in all_scenes if "val" in i and "mini" not in i])[29])
+            self.test_scene = os.path.join(hm3d_dir, sorted([i for i in all_scenes if "train" in i])[10])
             self.scene_name = self.test_scene.split('/')[-1].split('.')[0]
             print("scene: ", self.test_scene)
         elif self.dataset == 'Replica_CAD':
@@ -55,7 +55,7 @@ class DataRecorder():
             print("dataset not supported")
             exit()
         
-        self.trajectory_folder = "/home/nico/semesterproject/data/re-id_benchmark_ycb/trajectories/"        
+        self.trajectory_folder = "/home/nico/semesterproject/data/re-id_benchmark_ycb/trajectories/train/"        
         self.out_dir = '/home/nico/semesterproject/data/re-id_benchmark_ycb'
         self.initial_state_dict_path = 'data/init_state_dict.pkl'
         self.object_config_dir = "data/replica_cad/configs/objects_new_label"
@@ -81,6 +81,9 @@ class DataRecorder():
         self.rotation_step = 4
 
         self.list_of_actions = []
+        self.object_dynamics = {}
+        self.dynamic_scene = False
+
 
         self.semantic_palette = np.array(self.generate_color_palette(256),dtype=np.uint8)
         
@@ -621,6 +624,27 @@ class DataRecorder():
         self.rigid_obj_mgr.remove_object_by_handle(obj.handle)
         self.object_list.pop(id)
 
+    def get_random_force(self, obj):
+        force = (mn.Vector3([random.uniform(0, 10) for i in range(3)])+self.sim.get_gravity()*obj.mass)
+        # object.apply_force(force, np.array([0,0,0]))
+        return force
+
+    def get_random_torque(self, obj):
+        torque = mn.Vector3([random.uniform(0, 1) for i in range(3)])
+        # object.apply_torque(torque)
+        return torque
+
+    def set_forces_torques(self):
+        for obj in self.object_list:
+            force = self.get_random_force(obj)
+            torque = self.get_random_torque(obj)
+            self.object_dynamics[obj.handle] = {"force": force, "torque": torque}
+
+    def apply_forces_torques(self):
+        for obj in self.object_list:
+            obj.apply_force(self.object_dynamics[obj.handle]["force"], np.array([0.0,0.0,0.0]))
+            obj.apply_torque(self.object_dynamics[obj.handle]["torque"])
+
     def set_agent_state_as_initial_state(self):
         """
         Set the agent's initial state.
@@ -631,7 +655,6 @@ class DataRecorder():
 
         with open(self.initial_state_dict_path, 'wb') as f:
             pickle.dump(self.agent_initial_state_dict, f)
-
 
     def raw_to_object_seg(self, semantic_obs, semantic_palette, labels):
         semantic_obs = np.where(semantic_obs < 1660, 0, semantic_obs)
@@ -740,15 +763,18 @@ class DataRecorder():
         print("trajectory saved.")
     
     def play_trajectory(self, trajectory):
+        self.set_forces_torques()
         for state in trajectory:
             agent_state = habitat_sim.AgentState()
             agent_state.position = state[0]
             agent_state.rotation = state[1]
-            sensor_rot_modified = state[3] * quaternion.from_rotation_vector(habitat_sim.geo.LEFT * np.pi / 10)
+            sensor_rot_modified = state[3] * quaternion.from_rotation_vector(habitat_sim.geo.LEFT * np.pi / 25)
             agent_state.sensor_states['color_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
             agent_state.sensor_states['depth_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
             agent_state.sensor_states['semantic_sensor'] = habitat_sim.SixDOFPose(state[2], sensor_rot_modified)
             self.sim.agents[0].set_state(agent_state, infer_sensor_states=False)
+            if self.dynamic_scene:
+                self.apply_forces_torques()
             self.sim.step_physics(1.0/30.0)
             self.observations = self.sim.get_sensor_observations()
 
